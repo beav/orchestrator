@@ -47,17 +47,105 @@ go build -o orchestrator ./cmd/orchestrator
 
 The `orchestrator.yaml` file supports:
 
-| Field           | Default              | Description                                |
-|-----------------|----------------------|--------------------------------------------|
-| `slack_webhook` | (empty)              | Slack webhook URL for task notifications   |
-| `output_dir`    | `./tasks`            | Directory for task output                  |
-| `gjoll_env`     | `./configs/sandbox.tf` | Path to gjoll .tf environment file       |
-| `allowed_repos` | `[]` (deny all)      | Repos allowed for `open_pr`/`update_pr`/`comment_on_pr` (glob patterns)|
-| `profiles_repo` | (empty)              | GitHub repo containing profile directories (e.g. `myorg/profiles`) |
-| `profiles_dir`  | (empty)              | Local directory override for profiles (takes precedence over `profiles_repo`) |
-| `daemon.poll_interval` | `60s`         | How often the daemon polls for new PR comments and tasks |
-| `daemon.allowed_commenters` | `[]`    | GitHub usernames allowed to trigger `task continue` via PR comments and to create tasks via `tasks_repo` issues |
-| `daemon.tasks_repo` | (empty)          | GitHub repo to monitor for task specs and issues (e.g. `myorg/tasks`) |
+| Field                       | Default                   | Description                                |
+|-----------------------------|---------------------------|--------------------------------------------|
+| `slack_webhook`             | (empty)                   | Slack webhook URL for task notifications   |
+| `output_dir`                | `./tasks`                 | Directory for task output                  |
+| `sandbox_backend`           | `gjoll`                   | Sandbox backend: `gjoll` (VMs) or `podman` (containers) |
+| `gjoll_env`                 | `./configs/sandbox.tf`    | Path to gjoll .tf environment file (gjoll backend) |
+| `podman_image`              | `fedora:43`               | Container image for sandboxes (podman backend) |
+| `anthropic_key_file`        | `~/.anthropic/api_key`    | Path to Anthropic API key (podman backend) |
+| `allowed_repos`             | `[]` (deny all)           | Repos allowed for `open_pr`/`update_pr`/`comment_on_pr` (glob patterns)|
+| `profiles_repo`             | (empty)                   | GitHub repo containing profile directories (e.g. `myorg/profiles`) |
+| `profiles_dir`              | (empty)                   | Local directory override for profiles (takes precedence over `profiles_repo`) |
+| `daemon.poll_interval`      | `60s`                     | How often the daemon polls for new PR comments and tasks |
+| `daemon.allowed_commenters` | `[]`                      | GitHub usernames allowed to trigger `task continue` via PR comments and to create tasks via `tasks_repo` issues |
+| `daemon.tasks_repo`         | (empty)                   | GitHub repo to monitor for task specs and issues (e.g. `myorg/tasks`) |
+
+## Local Development
+
+The orchestrator supports two sandbox backends for local development:
+
+### Option 1: Podman Backend (Containers)
+
+Faster and lighter for local development. Sandboxes run as podman containers instead of VMs.
+
+**Prerequisites:**
+- **Podman**: `podman version` must work
+- **Anthropic API Key**: Sign up at [console.anthropic.com](https://console.anthropic.com) and save your API key to `~/.anthropic/api_key`
+
+**Setup:**
+
+1. Configure `orchestrator.yaml`:
+   ```yaml
+   sandbox_backend: "podman"
+   podman_image: "fedora:43"
+   anthropic_key_file: "~/.anthropic/api_key"
+   output_dir: "./tasks"
+   allowed_repos:
+     - your-username/*
+   ```
+
+2. Authenticate with GitHub CLI (for PR operations):
+   ```bash
+   gh auth login
+   ```
+
+3. Run a task:
+   ```bash
+   ./orchestrator task new hello-test "Create a hello.txt file"
+   ```
+
+**How it works:**
+- Podman containers are created on-demand for each task
+- Claude Code is installed via install.sh in the container
+- API key is securely copied with proper ownership
+- Containers run as non-root user `claude`
+- Faster startup than VMs (seconds vs minutes)
+
+### Option 2: Gjoll Backend with Direct Anthropic API
+
+Use gjoll VMs (same as cloud deployment) but with direct Anthropic API instead of Vertex AI.
+
+**Prerequisites:**
+- Same as main prerequisites above, plus:
+- **Anthropic API Key**: Save to `~/.anthropic/api_key` on the orchestrator host
+
+**Setup:**
+
+1. Copy the Anthropic API example config:
+   ```bash
+   cp configs/sandbox-anthropic-api.tf.example configs/sandbox-local.tf
+   ```
+
+2. Configure `orchestrator.yaml`:
+   ```yaml
+   sandbox_backend: "gjoll"
+   gjoll_env: "./configs/sandbox-local.tf"
+   output_dir: "./tasks"
+   allowed_repos:
+     - your-username/*
+   ```
+
+3. Ensure the API key is readable:
+   ```bash
+   chmod 600 ~/.anthropic/api_key
+   ```
+
+**Differences from Vertex AI setup:**
+- Uses `auth: "api-key"` instead of `auth: "gcp"` in the proxy configuration
+- Gjoll proxy reads `~/.anthropic/api_key` and injects `x-api-key` header
+- No GCP credentials needed
+
+### Comparison
+
+| Feature | Podman Backend | Gjoll Backend |
+|---------|----------------|---------------|
+| Startup time | Seconds | Minutes |
+| Resource usage | Low | Higher (full VM) |
+| Isolation | Container | Full VM |
+| Nested virtualization | Not needed | May be needed |
+| Best for | Local development, iteration | Testing VM workflows, cloud-like setup |
 
 ## Usage
 

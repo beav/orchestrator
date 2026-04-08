@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/drellabot/orchestrator/internal/gjoll"
+	"github.com/drellabot/orchestrator/internal/sandbox"
 )
 
 // Apply writes the profile's configuration into a sandbox.
@@ -19,16 +19,16 @@ import (
 //  2. Copy settings.json → ~/.claude/settings.json
 //  3. Register MCP servers from mcp.yaml via "claude mcp add"
 //  4. Run setup.sh on the host with helper scripts and environment variables
-func Apply(ctx context.Context, p *Profile, runner *gjoll.Runner, sandbox string, taskDir string, basePrompt string, vars map[string]string) error {
+func Apply(ctx context.Context, p *Profile, runner sandbox.Runner, sbx string, taskDir string, basePrompt string, vars map[string]string) error {
 	// 1. Write combined CLAUDE.md
 	claudemd := basePrompt + "\n\n# Profile: " + p.Name + "\n\n" + p.Claudemd
-	if err := writeToSandbox(ctx, runner, sandbox, claudemd, ":~/.claude/CLAUDE.md"); err != nil {
+	if err := writeToSandbox(ctx, runner, sbx, claudemd, ":~/.claude/CLAUDE.md"); err != nil {
 		return fmt.Errorf("writing CLAUDE.md: %w", err)
 	}
 
 	// 2. Copy settings.json if present
 	if p.Settings != "" {
-		if err := runner.Cp(ctx, sandbox, p.Settings, ":~/.claude/settings.json"); err != nil {
+		if err := runner.Cp(ctx, sbx, p.Settings, ":~/.claude/settings.json"); err != nil {
 			return fmt.Errorf("copying settings.json: %w", err)
 		}
 		slog.Debug("Copied profile settings.json", "profile", p.Name)
@@ -37,7 +37,7 @@ func Apply(ctx context.Context, p *Profile, runner *gjoll.Runner, sandbox string
 	// 3. Register MCP servers from mcp.yaml
 	if p.MCP != nil {
 		for _, server := range p.MCP.Servers {
-			if err := registerMCPServer(ctx, runner, sandbox, server); err != nil {
+			if err := registerMCPServer(ctx, runner, sbx, server); err != nil {
 				return fmt.Errorf("registering MCP server %q: %w", server.Name, err)
 			}
 			slog.Debug("Registered MCP server", "profile", p.Name, "server", server.Name)
@@ -46,7 +46,7 @@ func Apply(ctx context.Context, p *Profile, runner *gjoll.Runner, sandbox string
 
 	// 4. Run setup.sh on the host
 	if p.Setup != "" {
-		if err := runSetup(ctx, runner, sandbox, p.Setup, taskDir, vars); err != nil {
+		if err := runSetup(ctx, runner, sbx, p.Setup, taskDir, vars); err != nil {
 			return fmt.Errorf("running setup.sh: %w", err)
 		}
 		slog.Debug("Ran profile setup.sh", "profile", p.Name)
@@ -56,9 +56,9 @@ func Apply(ctx context.Context, p *Profile, runner *gjoll.Runner, sandbox string
 }
 
 // writeToSandbox writes content to a file in the sandbox via a temp file + cp.
-func writeToSandbox(ctx context.Context, runner *gjoll.Runner, sandbox, content, dest string) error {
+func writeToSandbox(ctx context.Context, runner sandbox.Runner, sbx, content, dest string) error {
 	// Ensure the parent directory exists in the sandbox
-	runner.SSH(ctx, sandbox, "mkdir -p ~/.claude")
+	runner.SSH(ctx, sbx, "mkdir -p ~/.claude")
 
 	tmpFile, err := os.CreateTemp("", "profile-*")
 	if err != nil {
@@ -72,11 +72,11 @@ func writeToSandbox(ctx context.Context, runner *gjoll.Runner, sandbox, content,
 	}
 	tmpFile.Close()
 
-	return runner.Cp(ctx, sandbox, tmpFile.Name(), dest)
+	return runner.Cp(ctx, sbx, tmpFile.Name(), dest)
 }
 
 // registerMCPServer runs "claude mcp add" in the sandbox for a single server.
-func registerMCPServer(ctx context.Context, runner *gjoll.Runner, sandbox string, server MCPServer) error {
+func registerMCPServer(ctx context.Context, runner sandbox.Runner, sbx string, server MCPServer) error {
 	var args []string
 	switch server.Transport {
 	case "stdio":
@@ -93,11 +93,11 @@ func registerMCPServer(ctx context.Context, runner *gjoll.Runner, sandbox string
 		}
 		args = append(args, server.Name, server.URL)
 	}
-	return runner.SSH(ctx, sandbox, strings.Join(args, " "))
+	return runner.SSH(ctx, sbx, strings.Join(args, " "))
 }
 
 // runSetup executes setup.sh on the host with helper scripts on PATH.
-func runSetup(ctx context.Context, runner *gjoll.Runner, sandbox, setupPath, taskDir string, vars map[string]string) error {
+func runSetup(ctx context.Context, runner sandbox.Runner, sbx, setupPath, taskDir string, vars map[string]string) error {
 	// Create a temp directory for helper scripts
 	helpersDir, err := os.MkdirTemp("", "profile-helpers-*")
 	if err != nil {
@@ -111,7 +111,7 @@ func runSetup(ctx context.Context, runner *gjoll.Runner, sandbox, setupPath, tas
 	sandboxCp := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 %s cp %s "$1" "$2"
-`, gjollBin, sandbox)
+`, gjollBin, sbx)
 	if err := os.WriteFile(filepath.Join(helpersDir, "sandbox-cp"), []byte(sandboxCp), 0755); err != nil {
 		return fmt.Errorf("writing sandbox-cp: %w", err)
 	}
@@ -120,7 +120,7 @@ set -euo pipefail
 	sandboxSSH := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 %s ssh %s -- "$@"
-`, gjollBin, sandbox)
+`, gjollBin, sbx)
 	if err := os.WriteFile(filepath.Join(helpersDir, "sandbox-ssh"), []byte(sandboxSSH), 0755); err != nil {
 		return fmt.Errorf("writing sandbox-ssh: %w", err)
 	}
@@ -128,7 +128,7 @@ set -euo pipefail
 	// Build environment
 	env := os.Environ()
 	env = append(env,
-		"SANDBOX="+sandbox,
+		"SANDBOX="+sbx,
 		"TASK_DIR="+taskDir,
 		"PATH="+helpersDir+":"+os.Getenv("PATH"),
 	)

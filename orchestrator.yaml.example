@@ -7,9 +7,21 @@
 # Directory where task output (code, conversations, metadata) is stored.
 # output_dir: "./tasks"
 
+# Sandbox backend: "gjoll" (VMs) or "podman" (containers).
+# Defaults to "gjoll" for backward compatibility.
+# sandbox_backend: "gjoll"
+
+# Gjoll backend settings (for VM-based sandboxes):
 # Path to the gjoll .tf file for sandbox provisioning.
 # Edit configs/sandbox.tf to set your Vertex AI project ID before use.
+# For direct Anthropic API, use configs/sandbox-anthropic-api.tf.example
 # gjoll_env: "./configs/sandbox.tf"
+
+# Podman backend settings (for container-based sandboxes):
+# Container image to use for sandboxes.
+# podman_image: "fedora:43"
+# Path to Anthropic API key file (will be copied into containers).
+# anthropic_key_file: "~/.anthropic/api_key"
 
 # Repos the sandbox is allowed to open PRs against (supports wildcards).
 # Requires gh CLI authentication on the host.

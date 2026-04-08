@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"github.com/drellabot/orchestrator/internal/sandbox"
 	"fmt"
 	"io"
 	"os"
@@ -11,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/drellabot/orchestrator/internal/config"
-	"github.com/drellabot/orchestrator/internal/gjoll"
 	"github.com/drellabot/orchestrator/internal/task"
 	"github.com/spf13/cobra"
 )
@@ -50,9 +50,14 @@ func runLog(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		runner := gjoll.New("")
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		runner := sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, cfg.PodmanImage, cfg.AnthropicKeyFile, 19090)
 		tw := newTranscriptWriter(os.Stdout, verbose)
-		return runner.SSHProxyOutput(ctx, taskName, tw, &gjoll.SSHOpts{Proxy: true}, "tail -f ~/transcript.jsonl")
+		return runner.SSHProxyOutput(ctx, taskName, tw, &sandbox.SSHOpts{Proxy: true}, "tail -f ~/transcript.jsonl")
 	}
 
 	// Read local transcript
