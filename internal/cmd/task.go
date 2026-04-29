@@ -143,7 +143,17 @@ func logPreflightWarnings(ctx context.Context, cfg *config.Config) *gh.Runner {
 
 func createSandboxRunner(cfg *config.Config) sandbox.Runner {
 	slog.Info("Creating sandbox runner", "backend", cfg.SandboxBackend)
-	return sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, cfg.PodmanImage, cfg.AnthropicKeyFile, mcpserver.MCPRemotePort)
+	podmanCfg := &sandbox.PodmanConfig{
+		Image:              cfg.PodmanImage,
+		AnthropicKeyFile:   cfg.AnthropicKeyFile,
+		APIProvider:        cfg.APIProvider,
+		VertexProjectID:    cfg.VertexProjectID,
+		VertexRegion:       cfg.VertexRegion,
+		VertexModel:        cfg.VertexModel,
+		GCPCredentialsFile: cfg.GCPCredentialsFile,
+		MCPPort:            mcpserver.MCPRemotePort,
+	}
+	return sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, podmanCfg)
 }
 
 func executeTask(ctx context.Context, taskName, taskDescription string, taskDir *task.Dir, cfg *config.Config, ghRunner *gh.Runner, continueSession bool, author string, profileName string, profileVars []string) error {
@@ -214,7 +224,13 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 
 	// Build the Claude run script
 	slog.Info("Running Claude", "task", taskName)
-	runScript := buildRunScript(taskDescription, continueSession)
+	apiCfg := &apiProviderConfig{
+		Provider:        cfg.APIProvider,
+		VertexProjectID: cfg.VertexProjectID,
+		VertexRegion:    cfg.VertexRegion,
+		VertexModel:     cfg.VertexModel,
+	}
+	runScript := buildRunScript(taskDescription, continueSession, apiCfg)
 
 	tmpRun, err := os.CreateTemp("", "run-claude-*.sh")
 	if err != nil {
@@ -270,7 +286,16 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 	return nil
 }
 
-func buildRunScript(taskDescription string, continueSession bool) string {
+// apiProviderConfig holds the settings needed by buildRunScript to configure
+// the correct environment variables for the chosen API provider.
+type apiProviderConfig struct {
+	Provider        string // "anthropic" or "vertex"
+	VertexProjectID string
+	VertexRegion    string
+	VertexModel     string
+}
+
+func buildRunScript(taskDescription string, continueSession bool, apiCfg *apiProviderConfig) string {
 	escapedDesc := strings.ReplaceAll(taskDescription, "'", "'\\''")
 
 	var claudeFlags string
@@ -280,16 +305,28 @@ func buildRunScript(taskDescription string, continueSession bool) string {
 		teeFlag = "-a"
 	}
 
+	var envBlock string
+	if apiCfg != nil && apiCfg.Provider == "vertex" {
+		envBlock = fmt.Sprintf(`export CLAUDE_CODE_USE_VERTEX=1
+export CLOUD_ML_REGION="%s"
+export ANTHROPIC_VERTEX_PROJECT_ID="%s"
+export ANTHROPIC_MODEL="%s"
+export GOOGLE_APPLICATION_CREDENTIALS="/home/claude/.config/gcloud/application_default_credentials.json"`,
+			apiCfg.VertexRegion, apiCfg.VertexProjectID, apiCfg.VertexModel)
+	} else {
+		envBlock = `export ANTHROPIC_API_KEY="$(cat ~/.anthropic/api_key)"`
+	}
+
 	return fmt.Sprintf(`#!/bin/bash
 source ~/.bashrc
 export PATH="/home/claude/.local/bin:$PATH"
-export ANTHROPIC_API_KEY="$(cat ~/.anthropic/api_key)"
+%s
 stdbuf -oL claude --dangerously-skip-permissions -p --verbose \
   --effort max \
   --output-format stream-json --append-system-prompt-file ~/system-prompt.md \
   %s '%s' \
   </dev/null | stdbuf -oL tee %s ~/transcript.jsonl
-`, claudeFlags, escapedDesc, teeFlag)
+`, envBlock, claudeFlags, escapedDesc, teeFlag)
 }
 
 func setupSandbox(ctx context.Context, runner sandbox.Runner, taskName string, taskDir *task.Dir, cfg *config.Config, profileName string, profileVars []string) error {

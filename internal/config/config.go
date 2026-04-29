@@ -29,6 +29,15 @@ type Config struct {
 	PodmanImage      string `yaml:"podman_image"`       // container image (e.g. "fedora:43")
 	AnthropicKeyFile string `yaml:"anthropic_key_file"` // path to API key for mounting
 	
+	// API provider: "anthropic" (direct API) or "vertex" (Google Vertex AI)
+	APIProvider      string `yaml:"api_provider"`
+	
+	// Vertex AI settings (used when api_provider is "vertex")
+	VertexProjectID    string `yaml:"vertex_project_id"`
+	VertexRegion       string `yaml:"vertex_region"`
+	VertexModel        string `yaml:"vertex_model"`          // e.g. "claude-sonnet-4-5"
+	GCPCredentialsFile string `yaml:"gcp_credentials_file"`  // path to ADC JSON on host
+	
 	AllowedRepos []string     `yaml:"allowed_repos"`
 	ProfilesRepo string       `yaml:"profiles_repo"`
 	ProfilesDir  string       `yaml:"profiles_dir"`
@@ -73,6 +82,15 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.AnthropicKeyFile == "" {
 		cfg.AnthropicKeyFile = "~/.anthropic/api_key"
+	}
+	if cfg.APIProvider == "" {
+		cfg.APIProvider = "anthropic"
+	}
+	if cfg.VertexModel == "" {
+		cfg.VertexModel = "claude-sonnet-4-5"
+	}
+	if cfg.GCPCredentialsFile == "" {
+		cfg.GCPCredentialsFile = "~/.config/gcloud/application_default_credentials.json"
 	}
 
 	return cfg, nil

@@ -65,10 +65,19 @@ func TestParseVarFlags(t *testing.T) {
 }
 
 func TestBuildRunScript(t *testing.T) {
+	anthropicCfg := &apiProviderConfig{Provider: "anthropic"}
+	vertexCfg := &apiProviderConfig{
+		Provider:        "vertex",
+		VertexProjectID: "my-project",
+		VertexRegion:    "us-east5",
+		VertexModel:     "claude-opus-4-6",
+	}
+
 	tests := []struct {
 		name            string
 		taskDescription string
 		continueSession bool
+		apiCfg          *apiProviderConfig
 		wantContains    []string
 		wantNotContains []string
 	}{
@@ -76,6 +85,7 @@ func TestBuildRunScript(t *testing.T) {
 			name:            "new session",
 			taskDescription: "Fix the bug in handler.go",
 			continueSession: false,
+			apiCfg:          anthropicCfg,
 			wantContains: []string{
 				"#!/bin/bash",
 				"source ~/.bashrc",
@@ -85,17 +95,20 @@ func TestBuildRunScript(t *testing.T) {
 				"--append-system-prompt-file ~/system-prompt.md",
 				"'Fix the bug in handler.go'",
 				"tee  ~/transcript.jsonl",
+				"ANTHROPIC_API_KEY",
 			},
 			wantNotContains: []string{
 				"--continue",
 				"tee -a",
 				"cd ~/project",
+				"CLAUDE_CODE_USE_VERTEX",
 			},
 		},
 		{
 			name:            "continue session",
 			taskDescription: "Also fix the tests",
 			continueSession: true,
+			apiCfg:          anthropicCfg,
 			wantContains: []string{
 				"--continue",
 				"--append-system-prompt-file ~/system-prompt.md",
@@ -107,15 +120,45 @@ func TestBuildRunScript(t *testing.T) {
 			name:            "description with single quotes",
 			taskDescription: "Fix the 'bug' in handler.go",
 			continueSession: false,
+			apiCfg:          anthropicCfg,
 			wantContains: []string{
 				`'Fix the '\''bug'\'' in handler.go'`,
+			},
+		},
+		{
+			name:            "vertex provider",
+			taskDescription: "Fix the bug",
+			continueSession: false,
+			apiCfg:          vertexCfg,
+			wantContains: []string{
+				"#!/bin/bash",
+				"CLAUDE_CODE_USE_VERTEX=1",
+				`CLOUD_ML_REGION="us-east5"`,
+				`ANTHROPIC_VERTEX_PROJECT_ID="my-project"`,
+				`ANTHROPIC_MODEL="claude-opus-4-6"`,
+				"GOOGLE_APPLICATION_CREDENTIALS=",
+			},
+			wantNotContains: []string{
+				"ANTHROPIC_API_KEY",
+			},
+		},
+		{
+			name:            "nil apiCfg defaults to anthropic",
+			taskDescription: "Fix something",
+			continueSession: false,
+			apiCfg:          nil,
+			wantContains: []string{
+				"ANTHROPIC_API_KEY",
+			},
+			wantNotContains: []string{
+				"CLAUDE_CODE_USE_VERTEX",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildRunScript(tt.taskDescription, tt.continueSession)
+			got := buildRunScript(tt.taskDescription, tt.continueSession, tt.apiCfg)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
 					t.Errorf("buildRunScript() missing %q\ngot:\n%s", want, got)

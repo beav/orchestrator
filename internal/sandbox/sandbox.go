@@ -44,11 +44,23 @@ type Runner interface {
 	Down(ctx context.Context, name string) error
 }
 
+// PodmanConfig holds configuration for the podman sandbox backend.
+type PodmanConfig struct {
+	Image              string
+	AnthropicKeyFile   string
+	APIProvider        string // "anthropic" or "vertex"
+	VertexProjectID    string
+	VertexRegion       string
+	VertexModel        string
+	GCPCredentialsFile string
+	MCPPort            int
+}
+
 // NewFromConfig creates the appropriate Runner based on configuration.
-func NewFromConfig(backend, gjollEnv, podmanImage, anthropicKeyFile string, mcpPort int) Runner {
+func NewFromConfig(backend, gjollEnv string, podmanCfg *PodmanConfig) Runner {
 	switch backend {
 	case "podman":
-		return NewPodman(podmanImage, anthropicKeyFile, mcpPort)
+		return NewPodman(podmanCfg)
 	case "gjoll":
 		return NewGjollAdapter(gjollEnv)
 	default:

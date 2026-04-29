@@ -12,20 +12,35 @@ import (
 
 // PodmanRunner implements Runner using podman containers as sandboxes.
 type PodmanRunner struct {
-	image         string
-	anthropicKey  string
-	mcpServerPort int
+	image              string
+	anthropicKey       string
+	apiProvider        string // "anthropic" or "vertex"
+	vertexProjectID    string
+	vertexRegion       string
+	vertexModel        string
+	gcpCredentialsFile string
+	mcpServerPort      int
 }
 
-// NewPodman creates a PodmanRunner.
-func NewPodman(image, anthropicKeyFile string, mcpPort int) *PodmanRunner {
+// NewPodman creates a PodmanRunner from a PodmanConfig.
+func NewPodman(cfg *PodmanConfig) *PodmanRunner {
+	image := cfg.Image
 	if image == "" {
 		image = "fedora:43"
 	}
+	apiProvider := cfg.APIProvider
+	if apiProvider == "" {
+		apiProvider = "anthropic"
+	}
 	return &PodmanRunner{
-		image:         image,
-		anthropicKey:  anthropicKeyFile,
-		mcpServerPort: mcpPort,
+		image:              image,
+		anthropicKey:       cfg.AnthropicKeyFile,
+		apiProvider:        apiProvider,
+		vertexProjectID:    cfg.VertexProjectID,
+		vertexRegion:       cfg.VertexRegion,
+		vertexModel:        cfg.VertexModel,
+		gcpCredentialsFile: cfg.GCPCredentialsFile,
+		mcpServerPort:      cfg.MCPPort,
 	}
 }
 
@@ -67,33 +82,10 @@ func (r *PodmanRunner) Up(ctx context.Context, name string, config string) error
 		return fmt.Errorf("claude install: %w", err)
 	}
 
-	// Copy and configure API key
-	if r.anthropicKey != "" {
-		keyPath := r.anthropicKey
-		if strings.HasPrefix(keyPath, "~/") {
-			home, _ := os.UserHomeDir()
-			keyPath = filepath.Join(home, keyPath[2:])
-		}
-
-		// Create .anthropic directory and copy key
-		mkdirCmd := []string{"bash", "-c", "mkdir -p /home/claude/.anthropic && chown claude:claude /home/claude/.anthropic"}
-		if err := r.SSH(ctx, name, mkdirCmd...); err != nil {
-			_ = r.Down(context.Background(), name)
-			return fmt.Errorf("creating .anthropic dir: %w", err)
-		}
-
-		// Copy API key
-		if err := r.Cp(ctx, name, keyPath, name+":/home/claude/.anthropic/api_key"); err != nil {
-			_ = r.Down(context.Background(), name)
-			return fmt.Errorf("copying API key: %w", err)
-		}
-
-		// Fix ownership
-		chownCmd := []string{"bash", "-c", "chown claude:claude /home/claude/.anthropic/api_key && chmod 600 /home/claude/.anthropic/api_key"}
-		if err := r.SSH(ctx, name, chownCmd...); err != nil {
-			_ = r.Down(context.Background(), name)
-			return fmt.Errorf("fixing API key permissions: %w", err)
-		}
+	// Configure API credentials based on provider
+	if err := r.setupCredentials(ctx, name); err != nil {
+		_ = r.Down(context.Background(), name)
+		return err
 	}
 
 	// Configure environment as claude user
@@ -185,6 +177,97 @@ func (r *PodmanRunner) Stop(ctx context.Context, name string) error {
 // Down destroys a container.
 func (r *PodmanRunner) Down(ctx context.Context, name string) error {
 	return r.run(ctx, "rm", "-f", name)
+}
+
+// setupCredentials configures API credentials in the container based on the provider.
+func (r *PodmanRunner) setupCredentials(ctx context.Context, name string) error {
+	switch r.apiProvider {
+	case "vertex":
+		return r.setupVertexCredentials(ctx, name)
+	default:
+		return r.setupAnthropicCredentials(ctx, name)
+	}
+}
+
+// setupAnthropicCredentials copies the Anthropic API key file into the container.
+func (r *PodmanRunner) setupAnthropicCredentials(ctx context.Context, name string) error {
+	if r.anthropicKey == "" {
+		return nil
+	}
+
+	keyPath := r.resolveHomePath(r.anthropicKey)
+
+	// Create .anthropic directory and copy key
+	mkdirCmd := []string{"bash", "-c", "mkdir -p /home/claude/.anthropic && chown claude:claude /home/claude/.anthropic"}
+	if err := r.SSH(ctx, name, mkdirCmd...); err != nil {
+		return fmt.Errorf("creating .anthropic dir: %w", err)
+	}
+
+	if err := r.Cp(ctx, name, keyPath, name+":/home/claude/.anthropic/api_key"); err != nil {
+		return fmt.Errorf("copying API key: %w", err)
+	}
+
+	chownCmd := []string{"bash", "-c", "chown claude:claude /home/claude/.anthropic/api_key && chmod 600 /home/claude/.anthropic/api_key"}
+	if err := r.SSH(ctx, name, chownCmd...); err != nil {
+		return fmt.Errorf("fixing API key permissions: %w", err)
+	}
+
+	return nil
+}
+
+// setupVertexCredentials copies the GCP ADC credentials file into the container.
+func (r *PodmanRunner) setupVertexCredentials(ctx context.Context, name string) error {
+	if r.gcpCredentialsFile == "" {
+		return fmt.Errorf("gcp_credentials_file is required when api_provider is vertex")
+	}
+
+	credsPath := r.resolveHomePath(r.gcpCredentialsFile)
+
+	// Create the gcloud config directory
+	mkdirCmd := []string{"bash", "-c", "mkdir -p /home/claude/.config/gcloud && chown -R claude:claude /home/claude/.config/gcloud"}
+	if err := r.SSH(ctx, name, mkdirCmd...); err != nil {
+		return fmt.Errorf("creating gcloud config dir: %w", err)
+	}
+
+	if err := r.Cp(ctx, name, credsPath, name+":/home/claude/.config/gcloud/application_default_credentials.json"); err != nil {
+		return fmt.Errorf("copying GCP credentials: %w", err)
+	}
+
+	chownCmd := []string{"bash", "-c", "chown claude:claude /home/claude/.config/gcloud/application_default_credentials.json && chmod 600 /home/claude/.config/gcloud/application_default_credentials.json"}
+	if err := r.SSH(ctx, name, chownCmd...); err != nil {
+		return fmt.Errorf("fixing GCP credentials permissions: %w", err)
+	}
+
+	return nil
+}
+
+// resolveHomePath expands a ~/ prefix to the current user's home directory.
+func (r *PodmanRunner) resolveHomePath(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, p[2:])
+	}
+	return p
+}
+
+// APIProvider returns the configured API provider ("anthropic" or "vertex").
+func (r *PodmanRunner) APIProvider() string {
+	return r.apiProvider
+}
+
+// VertexProjectID returns the configured Vertex project ID.
+func (r *PodmanRunner) VertexProjectID() string {
+	return r.vertexProjectID
+}
+
+// VertexRegion returns the configured Vertex region.
+func (r *PodmanRunner) VertexRegion() string {
+	return r.vertexRegion
+}
+
+// VertexModel returns the configured Vertex model.
+func (r *PodmanRunner) VertexModel() string {
+	return r.vertexModel
 }
 
 func (r *PodmanRunner) run(ctx context.Context, args ...string) error {

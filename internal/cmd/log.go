@@ -55,7 +55,17 @@ func runLog(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		runner := sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, cfg.PodmanImage, cfg.AnthropicKeyFile, 19090)
+		podmanCfg := &sandbox.PodmanConfig{
+			Image:              cfg.PodmanImage,
+			AnthropicKeyFile:   cfg.AnthropicKeyFile,
+			APIProvider:        cfg.APIProvider,
+			VertexProjectID:    cfg.VertexProjectID,
+			VertexRegion:       cfg.VertexRegion,
+			VertexModel:        cfg.VertexModel,
+			GCPCredentialsFile: cfg.GCPCredentialsFile,
+			MCPPort:            19090,
+		}
+		runner := sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, podmanCfg)
 		tw := newTranscriptWriter(os.Stdout, verbose)
 		return runner.SSHProxyOutput(ctx, taskName, tw, &sandbox.SSHOpts{Proxy: true}, "tail -f ~/transcript.jsonl")
 	}
