@@ -46,14 +46,11 @@ type Runner interface {
 
 // PodmanConfig holds configuration for the podman sandbox backend.
 type PodmanConfig struct {
-	Image              string
-	AnthropicKeyFile   string
-	APIProvider        string // "anthropic" or "vertex"
-	VertexProjectID    string
-	VertexRegion       string
-	VertexModel        string
-	GCPCredentialsFile string
-	MCPPort            int
+	Image           string
+	AgentProvider   string // e.g. "anthropic", "google", "openai"
+	AgentModel      string // e.g. "claude-sonnet-4-5"
+	AgentAPIKeyFile string // path to API-key file on host
+	MCPPort         int
 }
 
 // NewFromConfig creates the appropriate Runner based on configuration.
