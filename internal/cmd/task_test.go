@@ -65,100 +65,122 @@ func TestParseVarFlags(t *testing.T) {
 }
 
 func TestBuildRunScript(t *testing.T) {
-	anthropicCfg := &apiProviderConfig{Provider: "anthropic"}
-	vertexCfg := &apiProviderConfig{
-		Provider:        "vertex",
-		VertexProjectID: "my-project",
-		VertexRegion:    "us-east5",
-		VertexModel:     "claude-opus-4-6",
-	}
+	defaultCfg := &agentConfig{Provider: "anthropic", Model: "claude-sonnet-4-5"}
+	googleCfg := &agentConfig{Provider: "google", Model: "gemini-2.5-pro"}
+	orchestratorMCP := mcpExtension{Transport: "http", Value: "http://localhost:19090/mcp"}
 
 	tests := []struct {
 		name            string
+		taskName        string
 		taskDescription string
 		continueSession bool
-		apiCfg          *apiProviderConfig
+		agentCfg        *agentConfig
+		mcpExts         []mcpExtension
 		wantContains    []string
 		wantNotContains []string
 	}{
 		{
 			name:            "new session",
+			taskName:        "fix-handler",
 			taskDescription: "Fix the bug in handler.go",
 			continueSession: false,
-			apiCfg:          anthropicCfg,
+			agentCfg:        defaultCfg,
+			mcpExts:         []mcpExtension{orchestratorMCP},
 			wantContains: []string{
 				"#!/bin/bash",
 				"source ~/.bashrc",
-				"--dangerously-skip-permissions",
-				"--effort max",
+				"goose run",
+				"--provider anthropic",
+				"--model claude-sonnet-4-5",
 				"--output-format stream-json",
-				"--append-system-prompt-file ~/system-prompt.md",
-				"'Fix the bug in handler.go'",
+				`--system "$(cat ~/system-prompt.md)"`,
+				"--with-streamable-http-extension 'http://localhost:19090/mcp'",
+				"-n 'fix-handler'",
+				"-t 'Fix the bug in handler.go'",
 				"tee  ~/transcript.jsonl",
 				"ANTHROPIC_API_KEY",
 			},
 			wantNotContains: []string{
-				"--continue",
+				"--resume",
 				"tee -a",
-				"cd ~/project",
-				"CLAUDE_CODE_USE_VERTEX",
+				"claude --",
 			},
 		},
 		{
 			name:            "continue session",
+			taskName:        "fix-handler",
 			taskDescription: "Also fix the tests",
 			continueSession: true,
-			apiCfg:          anthropicCfg,
+			agentCfg:        defaultCfg,
+			mcpExts:         []mcpExtension{orchestratorMCP},
 			wantContains: []string{
-				"--continue",
-				"--append-system-prompt-file ~/system-prompt.md",
-				"'Also fix the tests'",
+				"--resume",
+				"-n 'fix-handler'",
+				"-t 'Also fix the tests'",
 				"tee -a ~/transcript.jsonl",
 			},
 		},
 		{
 			name:            "description with single quotes",
+			taskName:        "fix-bug",
 			taskDescription: "Fix the 'bug' in handler.go",
 			continueSession: false,
-			apiCfg:          anthropicCfg,
+			agentCfg:        defaultCfg,
+			mcpExts:         []mcpExtension{orchestratorMCP},
 			wantContains: []string{
-				`'Fix the '\''bug'\'' in handler.go'`,
+				`-t 'Fix the '\''bug'\'' in handler.go'`,
 			},
 		},
 		{
-			name:            "vertex provider",
+			name:            "google provider",
+			taskName:        "fix-bug",
 			taskDescription: "Fix the bug",
 			continueSession: false,
-			apiCfg:          vertexCfg,
+			agentCfg:        googleCfg,
+			mcpExts:         []mcpExtension{orchestratorMCP},
 			wantContains: []string{
-				"#!/bin/bash",
-				"CLAUDE_CODE_USE_VERTEX=1",
-				`CLOUD_ML_REGION="us-east5"`,
-				`ANTHROPIC_VERTEX_PROJECT_ID="my-project"`,
-				`ANTHROPIC_MODEL="claude-opus-4-6"`,
-				"GOOGLE_APPLICATION_CREDENTIALS=",
+				"--provider google",
+				"--model gemini-2.5-pro",
+				"GOOGLE_API_KEY",
 			},
 			wantNotContains: []string{
 				"ANTHROPIC_API_KEY",
 			},
 		},
 		{
-			name:            "nil apiCfg defaults to anthropic",
+			name:            "nil agentCfg defaults to anthropic",
+			taskName:        "fix-something",
 			taskDescription: "Fix something",
 			continueSession: false,
-			apiCfg:          nil,
+			agentCfg:        nil,
+			mcpExts:         []mcpExtension{orchestratorMCP},
 			wantContains: []string{
+				"--provider anthropic",
 				"ANTHROPIC_API_KEY",
 			},
-			wantNotContains: []string{
-				"CLAUDE_CODE_USE_VERTEX",
+		},
+		{
+			name:            "multiple MCP extensions",
+			taskName:        "multi-mcp",
+			taskDescription: "Do the thing",
+			continueSession: false,
+			agentCfg:        defaultCfg,
+			mcpExts: []mcpExtension{
+				orchestratorMCP,
+				{Transport: "http", Value: "http://localhost:8080/other"},
+				{Transport: "stdio", Value: "npx some-mcp-server"},
+			},
+			wantContains: []string{
+				"--with-streamable-http-extension 'http://localhost:19090/mcp'",
+				"--with-streamable-http-extension 'http://localhost:8080/other'",
+				"--with-extension 'npx some-mcp-server'",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildRunScript(tt.taskDescription, tt.continueSession, tt.apiCfg)
+			got := buildRunScript(tt.taskName, tt.taskDescription, tt.continueSession, tt.agentCfg, tt.mcpExts)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
 					t.Errorf("buildRunScript() missing %q\ngot:\n%s", want, got)
