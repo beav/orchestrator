@@ -26,17 +26,12 @@ type Config struct {
 	GjollEnv     string   `yaml:"gjoll_env"`      // path to .tf file for VM provisioning
 	
 	// Podman backend settings  
-	PodmanImage      string `yaml:"podman_image"`       // container image (e.g. "fedora:43")
-	AnthropicKeyFile string `yaml:"anthropic_key_file"` // path to API key for mounting
+	PodmanImage string `yaml:"podman_image"` // container image (e.g. "fedora:43")
 	
-	// API provider: "anthropic" (direct API) or "vertex" (Google Vertex AI)
-	APIProvider      string `yaml:"api_provider"`
-	
-	// Vertex AI settings (used when api_provider is "vertex")
-	VertexProjectID    string `yaml:"vertex_project_id"`
-	VertexRegion       string `yaml:"vertex_region"`
-	VertexModel        string `yaml:"vertex_model"`          // e.g. "claude-sonnet-4-5"
-	GCPCredentialsFile string `yaml:"gcp_credentials_file"`  // path to ADC JSON on host
+	// Agent settings (provider/model/key for the AI agent binary)
+	AgentProvider   string `yaml:"agent_provider"`     // e.g. "anthropic", "google", "openai"
+	AgentModel      string `yaml:"agent_model"`        // e.g. "claude-sonnet-4-5"
+	AgentAPIKeyFile string `yaml:"agent_api_key_file"` // path to API-key file on host
 	
 	AllowedRepos []string     `yaml:"allowed_repos"`
 	ProfilesRepo string       `yaml:"profiles_repo"`
@@ -80,17 +75,14 @@ func Load(path string) (*Config, error) {
 	if cfg.PodmanImage == "" {
 		cfg.PodmanImage = "fedora:43"
 	}
-	if cfg.AnthropicKeyFile == "" {
-		cfg.AnthropicKeyFile = "~/.anthropic/api_key"
+	if cfg.AgentProvider == "" {
+		cfg.AgentProvider = "anthropic"
 	}
-	if cfg.APIProvider == "" {
-		cfg.APIProvider = "anthropic"
+	if cfg.AgentModel == "" {
+		cfg.AgentModel = "claude-sonnet-4-5"
 	}
-	if cfg.VertexModel == "" {
-		cfg.VertexModel = "claude-sonnet-4-5"
-	}
-	if cfg.GCPCredentialsFile == "" {
-		cfg.GCPCredentialsFile = "~/.config/gcloud/application_default_credentials.json"
+	if cfg.AgentAPIKeyFile == "" {
+		cfg.AgentAPIKeyFile = "~/.anthropic/api_key"
 	}
 
 	return cfg, nil
