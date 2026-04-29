@@ -12,53 +12,51 @@ import (
 	"github.com/drellabot/orchestrator/internal/sandbox"
 )
 
-// Apply writes the profile's configuration into a sandbox.
+// MCPExtension represents an MCP server to pass to goose at runtime.
+type MCPExtension struct {
+	Transport string // "http" or "stdio"
+	Value     string // URL for http, command string for stdio
+}
+
+// Apply writes the profile's configuration into a sandbox and returns MCP
+// extensions that should be passed to the agent at runtime.
 //
 // It performs the following steps (skipping optional files that are absent):
-//  1. Write base prompt + profile CLAUDE.md → ~/.claude/CLAUDE.md
-//  2. Copy settings.json → ~/.claude/settings.json
-//  3. Register MCP servers from mcp.yaml via "claude mcp add"
-//  4. Run setup.sh on the host with helper scripts and environment variables
-func Apply(ctx context.Context, p *Profile, runner sandbox.Runner, sbx string, taskDir string, basePrompt string, vars map[string]string) error {
-	// 1. Write combined CLAUDE.md
-	claudemd := basePrompt + "\n\n# Profile: " + p.Name + "\n\n" + p.Claudemd
-	if err := writeToSandbox(ctx, runner, sbx, claudemd, ":~/.claude/CLAUDE.md"); err != nil {
-		return fmt.Errorf("writing CLAUDE.md: %w", err)
+//  1. Write base prompt + profile hints → ~/workspace/.goosehints
+//  2. Collect MCP servers from mcp.yaml as runtime extensions
+//  3. Run setup.sh on the host with helper scripts and environment variables
+func Apply(ctx context.Context, p *Profile, runner sandbox.Runner, sbx string, taskDir string, basePrompt string, vars map[string]string) ([]MCPExtension, error) {
+	// 1. Write combined .goosehints
+	goosehints := basePrompt + "\n\n# Profile: " + p.Name + "\n\n" + p.Claudemd
+	if err := writeToSandbox(ctx, runner, sbx, goosehints, ":~/workspace/.goosehints"); err != nil {
+		return nil, fmt.Errorf("writing .goosehints: %w", err)
 	}
 
-	// 2. Copy settings.json if present
-	if p.Settings != "" {
-		if err := runner.Cp(ctx, sbx, p.Settings, ":~/.claude/settings.json"); err != nil {
-			return fmt.Errorf("copying settings.json: %w", err)
-		}
-		slog.Debug("Copied profile settings.json", "profile", p.Name)
-	}
-
-	// 3. Register MCP servers from mcp.yaml
+	// 2. Collect MCP extensions (returned to caller for runtime flags)
+	var exts []MCPExtension
 	if p.MCP != nil {
 		for _, server := range p.MCP.Servers {
-			if err := registerMCPServer(ctx, runner, sbx, server); err != nil {
-				return fmt.Errorf("registering MCP server %q: %w", server.Name, err)
-			}
-			slog.Debug("Registered MCP server", "profile", p.Name, "server", server.Name)
+			ext := mcpServerToExtension(server)
+			exts = append(exts, ext)
+			slog.Debug("Collected MCP extension", "profile", p.Name, "server", server.Name)
 		}
 	}
 
-	// 4. Run setup.sh on the host
+	// 3. Run setup.sh on the host
 	if p.Setup != "" {
 		if err := runSetup(ctx, runner, sbx, p.Setup, taskDir, vars); err != nil {
-			return fmt.Errorf("running setup.sh: %w", err)
+			return nil, fmt.Errorf("running setup.sh: %w", err)
 		}
 		slog.Debug("Ran profile setup.sh", "profile", p.Name)
 	}
 
-	return nil
+	return exts, nil
 }
 
 // writeToSandbox writes content to a file in the sandbox via a temp file + cp.
 func writeToSandbox(ctx context.Context, runner sandbox.Runner, sbx, content, dest string) error {
 	// Ensure the parent directory exists in the sandbox
-	runner.SSH(ctx, sbx, "bash", "-c", "su - claude -c 'mkdir -p ~/.claude'")
+	runner.SSH(ctx, sbx, "bash", "-c", "su - claude -c 'mkdir -p ~/workspace'")
 
 	tmpFile, err := os.CreateTemp("", "profile-*")
 	if err != nil {
@@ -75,25 +73,20 @@ func writeToSandbox(ctx context.Context, runner sandbox.Runner, sbx, content, de
 	return runner.Cp(ctx, sbx, tmpFile.Name(), dest)
 }
 
-// registerMCPServer runs "claude mcp add" in the sandbox for a single server.
-func registerMCPServer(ctx context.Context, runner sandbox.Runner, sbx string, server MCPServer) error {
-	var args []string
+// mcpServerToExtension converts a profile MCP server definition to a runtime extension.
+func mcpServerToExtension(server MCPServer) MCPExtension {
 	switch server.Transport {
 	case "stdio":
-		args = []string{"claude", "mcp", "add", "--transport", "stdio"}
-		if server.Scope != "" {
-			args = append(args, "--scope", server.Scope)
+		cmd := server.Command
+		if len(server.Args) > 0 {
+			cmd += " " + strings.Join(server.Args, " ")
 		}
-		args = append(args, server.Name, server.Command)
-		args = append(args, server.Args...)
+		return MCPExtension{Transport: "stdio", Value: cmd}
 	case "http":
-		args = []string{"claude", "mcp", "add", "--transport", "http"}
-		if server.Scope != "" {
-			args = append(args, "--scope", server.Scope)
-		}
-		args = append(args, server.Name, server.URL)
+		return MCPExtension{Transport: "http", Value: server.URL}
+	default:
+		return MCPExtension{Transport: "http", Value: server.URL}
 	}
-	return runner.SSH(ctx, sbx, "bash", "-c", fmt.Sprintf("su - claude -c '%s'", strings.Join(args, " ")))
 }
 
 // runSetup executes setup.sh on the host with helper scripts on PATH.
