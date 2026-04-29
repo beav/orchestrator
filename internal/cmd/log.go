@@ -20,8 +20,8 @@ var followFlag bool
 
 var logCmd = &cobra.Command{
 	Use:   "log <task-name>",
-	Short: "Show Claude transcript for a task",
-	Long: `Shows the stream-json transcript from a Claude session.
+	Short: "Show agent transcript for a task",
+	Long: `Shows the stream-json transcript from a goose session.
 
 Without -f, reads the local transcript from the task directory (after the
 task has completed and the transcript has been copied back).

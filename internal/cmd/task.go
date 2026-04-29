@@ -34,9 +34,9 @@ var taskCmd = &cobra.Command{
 
 var taskNewCmd = &cobra.Command{
 	Use:   "new <task-name> <task-description...>",
-	Short: "Run a new task in a sandboxed Claude instance",
-	Long: `Provisions a sandbox VM via gjoll, starts an MCP server for code pulling,
-launches Claude with the task description, and archives the results.`,
+	Short: "Run a new task in a sandboxed agent instance",
+	Long: `Provisions a sandbox, starts an MCP server for code pulling,
+launches goose with the task description, and archives the results.`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: runTask,
 }
@@ -44,8 +44,8 @@ launches Claude with the task description, and archives the results.`,
 var taskContinueCmd = &cobra.Command{
 	Use:   "continue <task-name> <task-description...>",
 	Short: "Continue a stopped task with a new prompt",
-	Long: `Resumes a stopped sandbox VM, starts an MCP server, and launches Claude
-with --continue to resume the previous conversation with a new prompt.`,
+	Long: `Resumes a stopped sandbox, starts an MCP server, and launches goose
+with --resume to resume the previous conversation with a new prompt.`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: continueTask,
 }
