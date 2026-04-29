@@ -144,14 +144,11 @@ func logPreflightWarnings(ctx context.Context, cfg *config.Config) *gh.Runner {
 func createSandboxRunner(cfg *config.Config) sandbox.Runner {
 	slog.Info("Creating sandbox runner", "backend", cfg.SandboxBackend)
 	podmanCfg := &sandbox.PodmanConfig{
-		Image:              cfg.PodmanImage,
-		AnthropicKeyFile:   cfg.AnthropicKeyFile,
-		APIProvider:        cfg.APIProvider,
-		VertexProjectID:    cfg.VertexProjectID,
-		VertexRegion:       cfg.VertexRegion,
-		VertexModel:        cfg.VertexModel,
-		GCPCredentialsFile: cfg.GCPCredentialsFile,
-		MCPPort:            mcpserver.MCPRemotePort,
+		Image:           cfg.PodmanImage,
+		AgentProvider:   cfg.AgentProvider,
+		AgentModel:      cfg.AgentModel,
+		AgentAPIKeyFile: cfg.AgentAPIKeyFile,
+		MCPPort:         mcpserver.MCPRemotePort,
 	}
 	return sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, podmanCfg)
 }
@@ -197,7 +194,7 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 		}
 
 		slog.Debug("Copying conversations", "task", taskName)
-		if copyErr := runner.Cp(context.Background(), taskName, taskName+":/home/claude/.claude/", taskDir.ConversationsPath()); copyErr != nil {
+		if copyErr := runner.Cp(context.Background(), taskName, taskName+":/home/claude/.config/goose/", taskDir.ConversationsPath()); copyErr != nil {
 			slog.Warn("Failed to copy conversations", "task", taskName, "error", copyErr)
 		}
 
@@ -215,24 +212,30 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 
 	slog.Info("Sandbox provisioned", "task", taskName)
 
+	// Build the goose run script
+	slog.Info("Running goose", "task", taskName)
+	agentCfg := &agentConfig{
+		Provider: cfg.AgentProvider,
+		Model:    cfg.AgentModel,
+	}
+
+	// Collect MCP extensions: orchestrator is always included
+	mcpURL := fmt.Sprintf("http://localhost:%d/mcp", mcpserver.MCPRemotePort)
+	mcpExts := []mcpExtension{{Transport: "http", Value: mcpURL}}
+
+	// Add profile MCP extensions if available
 	if !continueSession {
-		if err := setupSandbox(ctx, runner, taskName, taskDir, cfg, profileName, profileVars); err != nil {
+		profileExts, err := setupSandbox(ctx, runner, taskName, taskDir, cfg, profileName, profileVars)
+		if err != nil {
 			return fmt.Errorf("setting up sandbox: %w", err)
 		}
 		slog.Debug("Sandbox setup complete", "task", taskName)
+		mcpExts = append(mcpExts, profileExts...)
 	}
 
-	// Build the Claude run script
-	slog.Info("Running Claude", "task", taskName)
-	apiCfg := &apiProviderConfig{
-		Provider:        cfg.APIProvider,
-		VertexProjectID: cfg.VertexProjectID,
-		VertexRegion:    cfg.VertexRegion,
-		VertexModel:     cfg.VertexModel,
-	}
-	runScript := buildRunScript(taskDescription, continueSession, apiCfg)
+	runScript := buildRunScript(taskName, taskDescription, continueSession, agentCfg, mcpExts)
 
-	tmpRun, err := os.CreateTemp("", "run-claude-*.sh")
+	tmpRun, err := os.CreateTemp("", "run-goose-*.sh")
 	if err != nil {
 		return fmt.Errorf("creating run script: %w", err)
 	}
@@ -243,10 +246,10 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 	}
 	tmpRun.Close()
 
-	if err := runner.Cp(ctx, taskName, tmpRun.Name(), taskName+":/home/claude/run-claude.sh"); err != nil {
+	if err := runner.Cp(ctx, taskName, tmpRun.Name(), taskName+":/home/claude/run-goose.sh"); err != nil {
 		return fmt.Errorf("copying run script: %w", err)
 	}
-	if err := runner.SSH(ctx, taskName, "bash", "-c", "chown claude:claude /home/claude/run-claude.sh && chmod +x /home/claude/run-claude.sh"); err != nil {
+	if err := runner.SSH(ctx, taskName, "bash", "-c", "chown claude:claude /home/claude/run-goose.sh && chmod +x /home/claude/run-goose.sh"); err != nil {
 		return fmt.Errorf("making run script executable: %w", err)
 	}
 
@@ -271,12 +274,12 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 
 	tw := newTranscriptWriter(os.Stdout, verbose)
 	w := io.MultiWriter(tw, transcriptFile)
-	if err := runner.SSHProxyOutput(ctx, taskName, w, sshOpts, "bash", "-c", "su - claude -c /home/claude/run-claude.sh"); err != nil {
-		slog.Error("Claude exited with error", "task", taskName, "error", err)
+	if err := runner.SSHProxyOutput(ctx, taskName, w, sshOpts, "bash", "-c", "su - claude -c /home/claude/run-goose.sh"); err != nil {
+		slog.Error("Goose exited with error", "task", taskName, "error", err)
 		// Don't return error - still want to archive results
 	}
 
-	slog.Info("Claude finished", "task", taskName)
+	slog.Info("Goose finished", "task", taskName)
 
 	if err := taskDir.TouchUpdatedAt(time.Now()); err != nil {
 		slog.Warn("Failed to update updated_at", "task", taskName, "error", err)
@@ -286,76 +289,101 @@ func executeTask(ctx context.Context, taskName, taskDescription string, taskDir 
 	return nil
 }
 
-// apiProviderConfig holds the settings needed by buildRunScript to configure
-// the correct environment variables for the chosen API provider.
-type apiProviderConfig struct {
-	Provider        string // "anthropic" or "vertex"
-	VertexProjectID string
-	VertexRegion    string
-	VertexModel     string
+// agentConfig holds the provider/model settings for the goose run script.
+type agentConfig struct {
+	Provider string // goose --provider (e.g., "anthropic", "google", "openai")
+	Model    string // goose --model
 }
 
-func buildRunScript(taskDescription string, continueSession bool, apiCfg *apiProviderConfig) string {
+// mcpExtension represents an MCP server to pass to goose at runtime.
+type mcpExtension struct {
+	Transport string // "http" or "stdio"
+	Value     string // URL for http, command string for stdio
+}
+
+// providerEnvVar returns the environment variable name for the given provider's API key.
+func providerEnvVar(provider string) string {
+	switch provider {
+	case "google":
+		return "GOOGLE_API_KEY"
+	case "openai":
+		return "OPENAI_API_KEY"
+	case "openrouter":
+		return "OPENROUTER_API_KEY"
+	default:
+		return "ANTHROPIC_API_KEY"
+	}
+}
+
+func buildRunScript(taskName, taskDescription string, continueSession bool, agentCfg *agentConfig, mcpExts []mcpExtension) string {
 	escapedDesc := strings.ReplaceAll(taskDescription, "'", "'\\''")
 
-	var claudeFlags string
+	var resumeFlag string
 	var teeFlag string
 	if continueSession {
-		claudeFlags = "--continue"
+		resumeFlag = "--resume"
 		teeFlag = "-a"
 	}
 
-	var envBlock string
-	if apiCfg != nil && apiCfg.Provider == "vertex" {
-		envBlock = fmt.Sprintf(`export CLAUDE_CODE_USE_VERTEX=1
-export CLOUD_ML_REGION="%s"
-export ANTHROPIC_VERTEX_PROJECT_ID="%s"
-export ANTHROPIC_MODEL="%s"
-export GOOGLE_APPLICATION_CREDENTIALS="/home/claude/.config/gcloud/application_default_credentials.json"`,
-			apiCfg.VertexRegion, apiCfg.VertexProjectID, apiCfg.VertexModel)
-	} else {
-		envBlock = `export ANTHROPIC_API_KEY="$(cat ~/.anthropic/api_key)"`
+	provider := "anthropic"
+	model := "claude-sonnet-4-5"
+	if agentCfg != nil {
+		if agentCfg.Provider != "" {
+			provider = agentCfg.Provider
+		}
+		if agentCfg.Model != "" {
+			model = agentCfg.Model
+		}
+	}
+
+	envVar := providerEnvVar(provider)
+
+	// Build MCP extension flags
+	var mcpFlags string
+	for _, ext := range mcpExts {
+		switch ext.Transport {
+		case "http":
+			mcpFlags += fmt.Sprintf(" \\\n  --with-streamable-http-extension '%s'", ext.Value)
+		case "stdio":
+			mcpFlags += fmt.Sprintf(" \\\n  --with-extension '%s'", ext.Value)
+		}
 	}
 
 	return fmt.Sprintf(`#!/bin/bash
 source ~/.bashrc
 export PATH="/home/claude/.local/bin:$PATH"
-%s
-stdbuf -oL claude --dangerously-skip-permissions -p --verbose \
-  --effort max \
-  --output-format stream-json --append-system-prompt-file ~/system-prompt.md \
-  %s '%s' \
+export %s="$(cat ~/.agent/api_key)"
+stdbuf -oL goose run \
+  --provider %s --model %s \
+  --output-format stream-json \
+  --system "$(cat ~/system-prompt.md)"%s \
+  %s -n '%s' \
+  -t '%s' \
   </dev/null | stdbuf -oL tee %s ~/transcript.jsonl
-`, envBlock, claudeFlags, escapedDesc, teeFlag)
+`, envVar, provider, model, mcpFlags, resumeFlag, taskName, escapedDesc, teeFlag)
 }
 
-func setupSandbox(ctx context.Context, runner sandbox.Runner, taskName string, taskDir *task.Dir, cfg *config.Config, profileName string, profileVars []string) error {
+func setupSandbox(ctx context.Context, runner sandbox.Runner, taskName string, taskDir *task.Dir, cfg *config.Config, profileName string, profileVars []string) ([]mcpExtension, error) {
 	// Always: configure git (run as claude user)
 	if err := runner.SSH(ctx, taskName, "bash", "-c", "su - claude -c 'git config --global user.name Drellabot'"); err != nil {
-		return fmt.Errorf("git config user.name: %w", err)
+		return nil, fmt.Errorf("git config user.name: %w", err)
 	}
 	if err := runner.SSH(ctx, taskName, "bash", "-c", "su - claude -c 'git config --global user.email imagebuilder-bots+drella@redhat.com'"); err != nil {
-		return fmt.Errorf("git config user.email: %w", err)
-	}
-
-	// Always: register orchestrator MCP server
-	mcpURL := fmt.Sprintf("http://localhost:%d/mcp", mcpserver.MCPRemotePort)
-	mcpCmd := fmt.Sprintf("claude mcp add --transport http orchestrator %s --scope user", mcpURL)
-	if err := runner.SSH(ctx, taskName, "bash", "-c", fmt.Sprintf("su - claude -c '%s'", mcpCmd)); err != nil {
-		return fmt.Errorf("registering MCP server: %w", err)
+		return nil, fmt.Errorf("git config user.email: %w", err)
 	}
 
 	if profileName != "" {
 		return setupSandboxWithProfile(ctx, runner, taskName, taskDir, cfg, profileName, profileVars)
 	}
-	return setupSandboxDefault(ctx, runner, taskName)
+	err := setupSandboxDefault(ctx, runner, taskName)
+	return nil, err
 }
 
 // setupSandboxWithProfile applies a profile's configuration to the sandbox.
-func setupSandboxWithProfile(ctx context.Context, runner sandbox.Runner, taskName string, taskDir *task.Dir, cfg *config.Config, profileName string, profileVars []string) error {
+func setupSandboxWithProfile(ctx context.Context, runner sandbox.Runner, taskName string, taskDir *task.Dir, cfg *config.Config, profileName string, profileVars []string) ([]mcpExtension, error) {
 	profileSource, cleanup, err := resolveProfileSource(ctx, cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if cleanup != nil {
 		defer cleanup()
@@ -363,35 +391,41 @@ func setupSandboxWithProfile(ctx context.Context, runner sandbox.Runner, taskNam
 
 	p, err := profile.Load(profileSource, profileName)
 	if err != nil {
-		return fmt.Errorf("loading profile: %w", err)
+		return nil, fmt.Errorf("loading profile: %w", err)
 	}
 
 	slog.Info("Applying profile", "profile", profileName, "task", taskName)
 
 	vars := parseVarFlags(profileVars)
-	if err := profile.Apply(ctx, p, runner, taskName, taskDir.Path(), prompts.Base, vars); err != nil {
-		return fmt.Errorf("applying profile: %w", err)
+	profileExts, err := profile.Apply(ctx, p, runner, taskName, taskDir.Path(), prompts.Base, vars)
+	if err != nil {
+		return nil, fmt.Errorf("applying profile: %w", err)
 	}
 
-	// Write the base prompt as system-prompt.md for --append-system-prompt-file
-	// (profile CLAUDE.md is in ~/.claude/CLAUDE.md, picked up automatically)
+	// Write the base prompt as system-prompt.md for --system flag
 	tmpFile, err := os.CreateTemp("", "prompt-*.md")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
 	defer os.Remove(tmpFile.Name())
 
 	if _, err := tmpFile.WriteString(prompts.OnInit); err != nil {
 		tmpFile.Close()
-		return fmt.Errorf("writing prompt: %w", err)
+		return nil, fmt.Errorf("writing prompt: %w", err)
 	}
 	tmpFile.Close()
 
 	if err := runner.Cp(ctx, taskName, tmpFile.Name(), ":~/system-prompt.md"); err != nil {
-		return fmt.Errorf("copying system prompt: %w", err)
+		return nil, fmt.Errorf("copying system prompt: %w", err)
 	}
 
-	return nil
+	// Convert profile MCP extensions to our type
+	var exts []mcpExtension
+	for _, pe := range profileExts {
+		exts = append(exts, mcpExtension{Transport: pe.Transport, Value: pe.Value})
+	}
+
+	return exts, nil
 }
 
 // setupSandboxDefault preserves the existing behavior when no profile is specified.

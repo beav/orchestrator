@@ -56,14 +56,11 @@ func runLog(cmd *cobra.Command, args []string) error {
 		}
 
 		podmanCfg := &sandbox.PodmanConfig{
-			Image:              cfg.PodmanImage,
-			AnthropicKeyFile:   cfg.AnthropicKeyFile,
-			APIProvider:        cfg.APIProvider,
-			VertexProjectID:    cfg.VertexProjectID,
-			VertexRegion:       cfg.VertexRegion,
-			VertexModel:        cfg.VertexModel,
-			GCPCredentialsFile: cfg.GCPCredentialsFile,
-			MCPPort:            19090,
+			Image:           cfg.PodmanImage,
+			AgentProvider:   cfg.AgentProvider,
+			AgentModel:      cfg.AgentModel,
+			AgentAPIKeyFile: cfg.AgentAPIKeyFile,
+			MCPPort:         19090,
 		}
 		runner := sandbox.NewFromConfig(cfg.SandboxBackend, cfg.GjollEnv, podmanCfg)
 		tw := newTranscriptWriter(os.Stdout, verbose)
