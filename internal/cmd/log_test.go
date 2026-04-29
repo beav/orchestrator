@@ -14,95 +14,101 @@ func TestFormatTranscriptLine(t *testing.T) {
 	}{
 		{
 			name: "text content",
-			line: `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`,
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]}}`,
 			want: "Hello world\n",
 		},
 		{
-			name: "tool use without input",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`,
+			name: "toolRequest without arguments",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolRequest","toolCall":{"status":"success","value":{"name":"Read","arguments":{}}}}]}}`,
 			want: "[tool] Read\n",
 		},
 		{
-			name: "tool use with file_path input",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/home/fedora/hello.txt","content":"hi"}}]}}`,
+			name: "toolRequest with file_path",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolRequest","toolCall":{"status":"success","value":{"name":"Write","arguments":{"file_path":"/home/fedora/hello.txt","content":"hi"}}}}]}}`,
 			want: "[tool] Write: /home/fedora/hello.txt\n",
 		},
 		{
-			name: "tool use Bash with description",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git add -A && git commit -m 'test'","description":"Stage and commit"}}]}}`,
-			want: "[tool] Bash: Stage and commit\n",
-		},
-		{
-			name: "tool use Bash falls back to command",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls -la"}}]}}`,
+			name: "toolRequest with command",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolRequest","toolCall":{"status":"success","value":{"name":"Bash","arguments":{"command":"ls -la"}}}}]}}`,
 			want: "[tool] Bash: ls -la\n",
 		},
 		{
-			name: "tool use Grep with pattern",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"func main"}}]}}`,
+			name: "toolRequest with pattern",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolRequest","toolCall":{"status":"success","value":{"name":"Grep","arguments":{"pattern":"func main"}}}}]}}`,
 			want: "[tool] Grep: func main\n",
 		},
 		{
-			name: "tool use MCP with path fallback",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__orchestrator__open_pr","input":{"path":"~/project"}}]}}`,
+			name: "toolRequest with path fallback",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolRequest","toolCall":{"status":"success","value":{"name":"mcp__orchestrator__open_pr","arguments":{"path":"~/project"}}}}]}}`,
 			want: "[tool] mcp__orchestrator__open_pr: ~/project\n",
 		},
 		{
-			name: "mixed content",
-			line: `{"type":"assistant","message":{"content":[{"type":"text","text":"Reading file"},{"type":"tool_use","name":"Edit","input":{"file_path":"main.go"}}]}}`,
+			name: "mixed text and toolRequest",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Reading file"},{"type":"toolRequest","toolCall":{"status":"success","value":{"name":"Edit","arguments":{"file_path":"main.go"}}}}]}}`,
 			want: "Reading file\n[tool] Edit: main.go\n",
 		},
 		{
-			name: "tool result string content",
-			line: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"123","content":"File created successfully"}]}}`,
+			name: "toolResponse with text",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolResponse","toolResult":{"status":"success","value":{"content":[{"type":"text","text":"File created successfully"}],"isError":false}}}]}}`,
 			want: "  → File created successfully\n",
 		},
 		{
-			name: "tool result array content ignored",
-			line: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"123","content":[{"type":"tool_reference","tool_name":"Write"}]}]}}`,
-			want: "",
-		},
-		{
-			name: "tool result multiline shows first line",
-			line: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"123","content":"[master abc1234] Add file\n 1 file changed"}]}}`,
+			name: "toolResponse multiline shows first line",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolResponse","toolResult":{"status":"success","value":{"content":[{"type":"text","text":"[master abc1234] Add file\n 1 file changed"}],"isError":false}}}]}}`,
 			want: "  → [master abc1234] Add file\n",
 		},
 		{
-			name: "result with stats",
-			line: `{"type":"result","subtype":"success","duration_ms":12092,"num_turns":5,"total_cost_usd":0.08}`,
-			want: "[result] success (5 turns, 12.1s, $0.08)\n",
+			name: "toolResponse empty content",
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"toolResponse","toolResult":{"status":"success","value":{"content":[],"isError":false}}}]}}`,
+			want: "",
 		},
 		{
-			name: "result with duration but no cost",
-			line: `{"type":"result","subtype":"success","duration_ms":5000,"num_turns":3}`,
-			want: "[result] success (3 turns, 5.0s)\n",
+			name: "complete with tokens",
+			line: `{"type":"complete","total_tokens":1234}`,
+			want: "[complete] total_tokens: 1234\n",
 		},
 		{
-			name: "result without stats",
-			line: `{"type":"result","subtype":"success"}`,
-			want: "[result] success\n",
+			name: "complete without tokens",
+			line: `{"type":"complete"}`,
+			want: "[complete]\n",
 		},
 		{
-			name: "result without subtype",
-			line: `{"type":"result"}`,
-			want: "[result] done\n",
+			name: "error event",
+			line: `{"type":"error","error":"something went wrong"}`,
+			want: "[error] something went wrong\n",
+		},
+		{
+			name: "notification hidden by default",
+			line: `{"type":"notification","data":"extension loaded"}`,
+			want: "",
+		},
+		{
+			name:    "notification shown when verbose",
+			line:    `{"type":"notification","data":"extension loaded"}`,
+			verbose: true,
+			want:    "[notification] {\"type\":\"notification\",\"data\":\"extension loaded\"}\n",
 		},
 		{
 			name: "thinking hidden by default",
-			line: `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me think about this."}]}}`,
+			line: `{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me think about this."}]}}`,
 			want: "",
 		},
 		{
 			name:    "thinking shown when verbose",
-			line:    `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me think about this."}]}}`,
+			line:    `{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me think about this."}]}}`,
 			verbose: true,
 			want:    "[thinking] Let me think about this.\n",
 		},
 		{
 			name:    "mixed with thinking verbose",
-			line:    `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Planning..."},{"type":"text","text":"Here is my answer"}]}}`,
+			line:    `{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Planning..."},{"type":"text","text":"Here is my answer"}]}}`,
 			verbose: true,
 			want:    "[thinking] Planning...\nHere is my answer\n",
+		},
+		{
+			name: "message with null message field",
+			line: `{"type":"message"}`,
+			want: "",
 		},
 		{
 			name: "unknown type ignored",
@@ -136,39 +142,39 @@ func TestTranscriptWriter(t *testing.T) {
 		{
 			name: "single complete line",
 			writes: []string{
-				`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n",
+				`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}` + "\n",
 			},
 			want: "hi\n",
 		},
 		{
 			name: "line split across writes",
 			writes: []string{
-				`{"type":"assis`,
-				`tant","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n",
+				`{"type":"messa`,
+				`ge","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}` + "\n",
 			},
 			want: "hi\n",
 		},
 		{
 			name: "multiple lines in one write",
 			writes: []string{
-				`{"type":"result","subtype":"success"}` + "\n" +
-					`{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}` + "\n",
+				`{"type":"complete"}` + "\n" +
+					`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}` + "\n",
 			},
-			want: "[result] success\ndone\n",
+			want: "[complete]\ndone\n",
 		},
 		{
 			name: "skips unknown types",
 			writes: []string{
 				`{"type":"system"}` + "\n" +
-					`{"type":"result"}` + "\n",
+					`{"type":"complete"}` + "\n",
 			},
-			want: "[result] done\n",
+			want: "[complete]\n",
 		},
 		{
 			name:    "verbose passes through to formatter",
 			verbose: true,
 			writes: []string{
-				`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}` + "\n",
+				`{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}` + "\n",
 			},
 			want: "[thinking] hmm\n",
 		},
@@ -190,70 +196,110 @@ func TestTranscriptWriter(t *testing.T) {
 	}
 }
 
-func TestToolInputSummary(t *testing.T) {
+func TestToolRequestSummary(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantName    string
+		wantSummary string
+	}{
+		{
+			name:        "file_path argument",
+			input:       `{"status":"success","value":{"name":"Write","arguments":{"file_path":"/home/fedora/hello.txt","content":"hi"}}}`,
+			wantName:    "Write",
+			wantSummary: "/home/fedora/hello.txt",
+		},
+		{
+			name:        "command argument",
+			input:       `{"status":"success","value":{"name":"Bash","arguments":{"command":"ls -la"}}}`,
+			wantName:    "Bash",
+			wantSummary: "ls -la",
+		},
+		{
+			name:        "description preferred over command",
+			input:       `{"status":"success","value":{"name":"Bash","arguments":{"command":"git status","description":"Show git status"}}}`,
+			wantName:    "Bash",
+			wantSummary: "Show git status",
+		},
+		{
+			name:        "pattern argument",
+			input:       `{"status":"success","value":{"name":"Grep","arguments":{"pattern":"func main"}}}`,
+			wantName:    "Grep",
+			wantSummary: "func main",
+		},
+		{
+			name:        "path fallback",
+			input:       `{"status":"success","value":{"name":"mcp__open_pr","arguments":{"path":"~/project"}}}`,
+			wantName:    "mcp__open_pr",
+			wantSummary: "~/project",
+		},
+		{
+			name:        "no matching arguments",
+			input:       `{"status":"success","value":{"name":"Read","arguments":{"foo":"bar"}}}`,
+			wantName:    "Read",
+			wantSummary: "",
+		},
+		{
+			name:        "empty arguments",
+			input:       `{"status":"success","value":{"name":"Read","arguments":{}}}`,
+			wantName:    "Read",
+			wantSummary: "",
+		},
+		{
+			name:        "no arguments",
+			input:       `{"status":"success","value":{"name":"Read"}}`,
+			wantName:    "Read",
+			wantSummary: "",
+		},
+		{
+			name:        "empty input",
+			input:       ``,
+			wantName:    "",
+			wantSummary: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotSummary := toolRequestSummary([]byte(tt.input))
+			if gotName != tt.wantName {
+				t.Errorf("toolRequestSummary() name = %q, want %q", gotName, tt.wantName)
+			}
+			if gotSummary != tt.wantSummary {
+				t.Errorf("toolRequestSummary() summary = %q, want %q", gotSummary, tt.wantSummary)
+			}
+		})
+	}
+}
+
+func TestToolResponseSummary(t *testing.T) {
 	tests := []struct {
 		name  string
-		tool  string
 		input string
 		want  string
 	}{
 		{
-			name:  "Write file_path",
-			tool:  "Write",
-			input: `{"file_path":"/home/fedora/hello.txt","content":"hi"}`,
-			want:  "/home/fedora/hello.txt",
+			name:  "text content",
+			input: `{"status":"success","value":{"content":[{"type":"text","text":"File created successfully"}],"isError":false}}`,
+			want:  "File created successfully",
 		},
 		{
-			name:  "Read file_path",
-			tool:  "Read",
-			input: `{"file_path":"/etc/hosts"}`,
-			want:  "/etc/hosts",
+			name:  "multiline text shows first line",
+			input: `{"status":"success","value":{"content":[{"type":"text","text":"[master abc1234] Add file\n 1 file changed"}],"isError":false}}`,
+			want:  "[master abc1234] Add file",
 		},
 		{
-			name:  "Bash description preferred",
-			tool:  "Bash",
-			input: `{"command":"git status","description":"Show git status"}`,
-			want:  "Show git status",
-		},
-		{
-			name:  "Bash command fallback",
-			tool:  "Bash",
-			input: `{"command":"echo hello"}`,
-			want:  "echo hello",
-		},
-		{
-			name:  "Grep pattern",
-			tool:  "Grep",
-			input: `{"pattern":"TODO","path":"/home/fedora"}`,
-			want:  "TODO",
-		},
-		{
-			name:  "Glob pattern",
-			tool:  "Glob",
-			input: `{"pattern":"**/*.go"}`,
-			want:  "**/*.go",
-		},
-		{
-			name:  "generic path fallback",
-			tool:  "mcp__orchestrator__open_pr",
-			input: `{"path":"~/project"}`,
-			want:  "~/project",
-		},
-		{
-			name:  "generic query fallback",
-			tool:  "ToolSearch",
-			input: `{"query":"select:Read,Write","max_results":3}`,
-			want:  "select:Read,Write",
-		},
-		{
-			name:  "empty input",
-			tool:  "Read",
-			input: `{}`,
+			name:  "empty content array",
+			input: `{"status":"success","value":{"content":[],"isError":false}}`,
 			want:  "",
 		},
 		{
-			name:  "null input",
-			tool:  "Read",
+			name:  "no text content",
+			input: `{"status":"success","value":{"content":[{"type":"image","data":"..."}],"isError":false}}`,
+			want:  "",
+		},
+		{
+			name:  "empty input",
 			input: ``,
 			want:  "",
 		},
@@ -261,9 +307,9 @@ func TestToolInputSummary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toolInputSummary(tt.tool, []byte(tt.input))
+			got := toolResponseSummary([]byte(tt.input))
 			if got != tt.want {
-				t.Errorf("toolInputSummary() = %q, want %q", got, tt.want)
+				t.Errorf("toolResponseSummary() = %q, want %q", got, tt.want)
 			}
 		})
 	}

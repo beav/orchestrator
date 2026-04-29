@@ -121,43 +121,50 @@ func (tw *transcriptWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// formatTranscriptLine formats a single stream-json line for human readability.
-// When verbose is true, thinking blocks are included in the output.
+// formatTranscriptLine formats a single goose stream-json line for human readability.
+// When verbose is true, thinking blocks and notifications are included in the output.
 func formatTranscriptLine(line []byte, verbose bool) string {
-	var msg struct {
-		Type    string `json:"type"`
-		Subtype string `json:"subtype"`
-		Message struct {
+	var event struct {
+		Type        string `json:"type"` // "message", "error", "complete", "notification"
+		Error       string `json:"error"`
+		TotalTokens *int   `json:"total_tokens"`
+		Message     *struct {
+			Role    string `json:"role"`
 			Content []struct {
-				Type     string          `json:"type"`
-				Text     string          `json:"text"`
-				Name     string          `json:"name"`
-				Input    json.RawMessage `json:"input"`
-				Thinking string          `json:"thinking"`
-				Content  json.RawMessage `json:"content"` // tool_result: string or array
+				Type       string          `json:"type"` // "text", "toolRequest", "toolResponse", "thinking"
+				Text       string          `json:"text"`
+				Thinking   string          `json:"thinking"`
+				ID         string          `json:"id"`
+				ToolCall   json.RawMessage `json:"toolCall"`
+				ToolResult json.RawMessage `json:"toolResult"`
 			} `json:"content"`
 		} `json:"message"`
-		DurationMS   int     `json:"duration_ms"`
-		NumTurns     int     `json:"num_turns"`
-		TotalCostUSD float64 `json:"total_cost_usd"`
 	}
-	if err := json.Unmarshal(line, &msg); err != nil {
+	if err := json.Unmarshal(line, &event); err != nil {
 		return ""
 	}
 
 	var out string
-	switch msg.Type {
-	case "assistant":
-		for _, c := range msg.Message.Content {
+	switch event.Type {
+	case "message":
+		if event.Message == nil {
+			return ""
+		}
+		for _, c := range event.Message.Content {
 			switch c.Type {
 			case "text":
 				out += c.Text + "\n"
-			case "tool_use":
-				summary := toolInputSummary(c.Name, c.Input)
+			case "toolRequest":
+				name, summary := toolRequestSummary(c.ToolCall)
 				if summary != "" {
-					out += fmt.Sprintf("[tool] %s: %s\n", c.Name, summary)
-				} else {
-					out += fmt.Sprintf("[tool] %s\n", c.Name)
+					out += fmt.Sprintf("[tool] %s: %s\n", name, summary)
+				} else if name != "" {
+					out += fmt.Sprintf("[tool] %s\n", name)
+				}
+			case "toolResponse":
+				result := toolResponseSummary(c.ToolResult)
+				if result != "" {
+					out += fmt.Sprintf("  → %s\n", result)
 				}
 			case "thinking":
 				if verbose && c.Thinking != "" {
@@ -165,65 +172,78 @@ func formatTranscriptLine(line []byte, verbose bool) string {
 				}
 			}
 		}
-	case "user":
-		for _, c := range msg.Message.Content {
-			if c.Type != "tool_result" || len(c.Content) == 0 {
-				continue
-			}
-			var s string
-			if json.Unmarshal(c.Content, &s) == nil && s != "" {
-				out += fmt.Sprintf("  → %s\n", firstLine(s, 200))
-			}
-		}
-	case "result":
-		subtype := msg.Subtype
-		if subtype == "" {
-			subtype = "done"
-		}
-		duration := float64(msg.DurationMS) / 1000
-		if msg.TotalCostUSD > 0 {
-			out = fmt.Sprintf("[result] %s (%d turns, %.1fs, $%.2f)\n", subtype, msg.NumTurns, duration, msg.TotalCostUSD)
-		} else if msg.DurationMS > 0 {
-			out = fmt.Sprintf("[result] %s (%d turns, %.1fs)\n", subtype, msg.NumTurns, duration)
+	case "complete":
+		if event.TotalTokens != nil {
+			out = fmt.Sprintf("[complete] total_tokens: %d\n", *event.TotalTokens)
 		} else {
-			out = fmt.Sprintf("[result] %s\n", subtype)
+			out = "[complete]\n"
+		}
+	case "error":
+		out = fmt.Sprintf("[error] %s\n", event.Error)
+	case "notification":
+		if verbose {
+			out = fmt.Sprintf("[notification] %s\n", firstLine(string(line), 200))
 		}
 	}
 	return out
 }
 
-// toolInputSummary extracts a short description from a tool's input.
-func toolInputSummary(name string, raw json.RawMessage) string {
+// toolRequestSummary extracts the tool name and a short description from a goose toolRequest.
+// The toolCall field has structure: {"status":"success","value":{"name":"...","arguments":{...}}}
+func toolRequestSummary(raw json.RawMessage) (name, summary string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var tc struct {
+		Value struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"value"`
+	}
+	if json.Unmarshal(raw, &tc) != nil {
+		return "", ""
+	}
+	name = tc.Value.Name
+
+	if len(tc.Value.Arguments) == 0 {
+		return name, ""
+	}
+
+	var args map[string]any
+	if json.Unmarshal(tc.Value.Arguments, &args) != nil {
+		return name, ""
+	}
+
+	// Try common field names for a short summary
+	for _, key := range []string{"file_path", "path", "description", "command", "pattern", "query", "url", "name"} {
+		if v, ok := args[key].(string); ok {
+			return name, firstLine(v, 80)
+		}
+	}
+	return name, ""
+}
+
+// toolResponseSummary extracts a short description from a goose toolResponse.
+// The toolResult field has structure: {"status":"success","value":{"content":[...],"isError":false}}
+func toolResponseSummary(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
+	var tr struct {
+		Value struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"value"`
+	}
+	if json.Unmarshal(raw, &tr) != nil {
 		return ""
 	}
-
-	switch name {
-	case "Write", "Read", "Edit":
-		if v, ok := m["file_path"].(string); ok {
-			return v
-		}
-	case "Bash":
-		if v, ok := m["description"].(string); ok {
-			return v
-		}
-		if v, ok := m["command"].(string); ok {
-			return firstLine(v, 80)
-		}
-	case "Grep", "Glob":
-		if v, ok := m["pattern"].(string); ok {
-			return v
-		}
-	}
-
-	// Fallback: try common field names
-	for _, key := range []string{"path", "query", "url", "name"} {
-		if v, ok := m[key].(string); ok {
-			return firstLine(v, 80)
+	for _, c := range tr.Value.Content {
+		if c.Type == "text" && c.Text != "" {
+			return firstLine(c.Text, 200)
 		}
 	}
 	return ""
