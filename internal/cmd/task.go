@@ -281,6 +281,7 @@ func buildRunScript(taskDescription string, continueSession bool) string {
 	}
 
 	return fmt.Sprintf(`#!/bin/bash
+source ~/.bashrc
 export PATH="/home/claude/.local/bin:$PATH"
 export ANTHROPIC_API_KEY="$(cat ~/.anthropic/api_key)"
 stdbuf -oL claude --dangerously-skip-permissions -p --verbose \
@@ -302,7 +303,8 @@ func setupSandbox(ctx context.Context, runner sandbox.Runner, taskName string, t
 
 	// Always: register orchestrator MCP server
 	mcpURL := fmt.Sprintf("http://localhost:%d/mcp", mcpserver.MCPRemotePort)
-	if err := runner.SSH(ctx, taskName, fmt.Sprintf("claude mcp add --transport http orchestrator %s --scope user", mcpURL)); err != nil {
+	mcpCmd := fmt.Sprintf("claude mcp add --transport http orchestrator %s --scope user", mcpURL)
+	if err := runner.SSH(ctx, taskName, "bash", "-c", fmt.Sprintf("su - claude -c '%s'", mcpCmd)); err != nil {
 		return fmt.Errorf("registering MCP server: %w", err)
 	}
 

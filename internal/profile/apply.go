@@ -58,7 +58,7 @@ func Apply(ctx context.Context, p *Profile, runner sandbox.Runner, sbx string, t
 // writeToSandbox writes content to a file in the sandbox via a temp file + cp.
 func writeToSandbox(ctx context.Context, runner sandbox.Runner, sbx, content, dest string) error {
 	// Ensure the parent directory exists in the sandbox
-	runner.SSH(ctx, sbx, "mkdir -p ~/.claude")
+	runner.SSH(ctx, sbx, "bash", "-c", "su - claude -c 'mkdir -p ~/.claude'")
 
 	tmpFile, err := os.CreateTemp("", "profile-*")
 	if err != nil {
@@ -93,7 +93,7 @@ func registerMCPServer(ctx context.Context, runner sandbox.Runner, sbx string, s
 		}
 		args = append(args, server.Name, server.URL)
 	}
-	return runner.SSH(ctx, sbx, strings.Join(args, " "))
+	return runner.SSH(ctx, sbx, "bash", "-c", fmt.Sprintf("su - claude -c '%s'", strings.Join(args, " ")))
 }
 
 // runSetup executes setup.sh on the host with helper scripts on PATH.

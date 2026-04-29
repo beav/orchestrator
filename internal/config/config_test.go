@@ -20,9 +20,12 @@ func TestLoad(t *testing.T) {
 			writeFile: true,
 			yaml:      "slack_webhook: https://hooks.slack.com/test\noutput_dir: /tmp/tasks\ngjoll_env: /path/to/sandbox.tf\n",
 			want: Config{
-				SlackWebhook: "https://hooks.slack.com/test",
-				OutputDir:    "/tmp/tasks",
-				GjollEnv:     "/path/to/sandbox.tf",
+				SlackWebhook:     "https://hooks.slack.com/test",
+				OutputDir:        "/tmp/tasks",
+				SandboxBackend:   "gjoll",
+				GjollEnv:         "/path/to/sandbox.tf",
+				PodmanImage:      "fedora:43",
+				AnthropicKeyFile: "~/.anthropic/api_key",
 			},
 		},
 		{
@@ -30,9 +33,12 @@ func TestLoad(t *testing.T) {
 			writeFile: true,
 			yaml:      "slack_webhook: https://hooks.slack.com/test\n",
 			want: Config{
-				SlackWebhook: "https://hooks.slack.com/test",
-				OutputDir:    "./tasks",
-				GjollEnv:     "./configs/sandbox.tf",
+				SlackWebhook:     "https://hooks.slack.com/test",
+				OutputDir:        "./tasks",
+				SandboxBackend:   "gjoll",
+				GjollEnv:         "./configs/sandbox.tf",
+				PodmanImage:      "fedora:43",
+				AnthropicKeyFile: "~/.anthropic/api_key",
 			},
 		},
 		{
@@ -40,8 +46,11 @@ func TestLoad(t *testing.T) {
 			writeFile: true,
 			yaml:      "",
 			want: Config{
-				OutputDir: "./tasks",
-				GjollEnv:  "./configs/sandbox.tf",
+				OutputDir:        "./tasks",
+				SandboxBackend:   "gjoll",
+				GjollEnv:         "./configs/sandbox.tf",
+				PodmanImage:      "fedora:43",
+				AnthropicKeyFile: "~/.anthropic/api_key",
 			},
 		},
 		{
@@ -49,9 +58,12 @@ func TestLoad(t *testing.T) {
 			writeFile: true,
 			yaml:      "allowed_repos:\n  - osbuild/osbuild\n  - drellabot/*\n",
 			want: Config{
-				OutputDir:    "./tasks",
-				GjollEnv:     "./configs/sandbox.tf",
-				AllowedRepos: []string{"osbuild/osbuild", "drellabot/*"},
+				OutputDir:        "./tasks",
+				SandboxBackend:   "gjoll",
+				GjollEnv:         "./configs/sandbox.tf",
+				PodmanImage:      "fedora:43",
+				AnthropicKeyFile: "~/.anthropic/api_key",
+				AllowedRepos:     []string{"osbuild/osbuild", "drellabot/*"},
 			},
 		},
 		{
@@ -59,8 +71,11 @@ func TestLoad(t *testing.T) {
 			writeFile: true,
 			yaml:      "daemon:\n  poll_interval: \"30s\"\n  allowed_commenters:\n    - alice\n    - bob\n",
 			want: Config{
-				OutputDir: "./tasks",
-				GjollEnv:  "./configs/sandbox.tf",
+				OutputDir:        "./tasks",
+				SandboxBackend:   "gjoll",
+				GjollEnv:         "./configs/sandbox.tf",
+				PodmanImage:      "fedora:43",
+				AnthropicKeyFile: "~/.anthropic/api_key",
 				Daemon: DaemonConfig{
 					PollInterval:      "30s",
 					AllowedCommenters: []string{"alice", "bob"},
@@ -72,10 +87,13 @@ func TestLoad(t *testing.T) {
 			writeFile: true,
 			yaml:      "profiles_repo: drellabot/profiles\nprofiles_dir: /tmp/profiles\n",
 			want: Config{
-				OutputDir:    "./tasks",
-				GjollEnv:     "./configs/sandbox.tf",
-				ProfilesRepo: "drellabot/profiles",
-				ProfilesDir:  "/tmp/profiles",
+				OutputDir:        "./tasks",
+				SandboxBackend:   "gjoll",
+				GjollEnv:         "./configs/sandbox.tf",
+				PodmanImage:      "fedora:43",
+				AnthropicKeyFile: "~/.anthropic/api_key",
+				ProfilesRepo:     "drellabot/profiles",
+				ProfilesDir:      "/tmp/profiles",
 			},
 		},
 		{
